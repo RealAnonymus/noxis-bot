@@ -16,7 +16,7 @@ const client = new Client({
 const RES_CHANNEL_ID   = '1485778322293002341';
 const APPLY_CHANNEL_ID = '1485778336977522800';
 const JUDGE_ROLE_NAME  = 'Judge';
-const COOLDOWN_HOURS   = 24; // hours before reapply after deny
+const COOLDOWN_HOURS   = 0.017; // hours before reapply after deny
 
 // In-memory stores
 const appCount     = { value: 0 };
