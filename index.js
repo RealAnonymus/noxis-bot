@@ -1,4 +1,8 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits } = require('discord.js');
+const {
+  Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder,
+  ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder,
+  TextInputStyle, PermissionFlagsBits, Collection
+} = require('discord.js');
 
 const client = new Client({
   intents: [
@@ -12,37 +16,61 @@ const client = new Client({
 const RES_CHANNEL_ID   = '1485778322293002341';
 const APPLY_CHANNEL_ID = '1485778336977522800';
 const JUDGE_ROLE_NAME  = 'Judge';
+const COOLDOWN_HOURS   = 24; // hours before reapply after deny
 
-let appCount = 0;
+// In-memory stores
+const appCount     = { value: 0 };
+const cooldowns    = new Collection(); // userId -> timestamp of deny
+const pendingApps  = new Collection(); // userId -> true (has open app)
 
-// ── READY — auto-send apply embed ────────────────────────────────────────────
+// ── Helper: is Judge ──────────────────────────────────────────────────────────
+function isJudge(member) {
+  return (
+    member.roles.cache.some(r => r.name === JUDGE_ROLE_NAME) ||
+    member.permissions.has(PermissionFlagsBits.ManageGuild)
+  );
+}
+
+// ── Helper: cinematic timestamp ───────────────────────────────────────────────
+function stamp() {
+  return new Date().toLocaleString('en-GB', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
+// ── READY ─────────────────────────────────────────────────────────────────────
 client.once('ready', async () => {
-  console.log(`✅ Noxis Bot online as ${client.user.tag}`);
+  console.log(`✅ NOXIS BOT — Online as ${client.user.tag}`);
 
   try {
-    const applyChannel = await client.channels.fetch(APPLY_CHANNEL_ID);
-    if (!applyChannel) return;
+    const ch = await client.channels.fetch(APPLY_CHANNEL_ID);
+    if (!ch) return;
 
-    // Delete old bot messages so there is no duplicate
-    const msgs = await applyChannel.messages.fetch({ limit: 20 });
-    for (const msg of msgs.values()) {
-      if (msg.author.id === client.user.id) await msg.delete().catch(() => {});
+    // Clean old bot messages
+    const msgs = await ch.messages.fetch({ limit: 20 });
+    for (const m of msgs.values()) {
+      if (m.author.id === client.user.id) await m.delete().catch(() => {});
     }
 
     const embed = new EmbedBuilder()
       .setColor(0xff1a2e)
-      .setTitle('🔴  NOXIS — Unit Applications')
+      .setTitle('NOXIS  —  Unit Applications')
       .setDescription(
-        '**Applying to be a Noxis member**\n\n' +
-        'Read the rules below before applying.\n\n' +
-        '📌 **APPLICATION RULES:**\n' +
-        '> Edit must be minimum **6 seconds** long\n' +
-        '> Loops do **not** count\n' +
-        '> Edit must be less than **1 month** old\n' +
-        '> No Heavy IBs allowed\n\n' +
-        'When you are ready, press the button below.'
+        '```\n' +
+        '  ┌─────────────────────────────────┐\n' +
+        '  │   APPLYING TO BE A NOXIS MEMBER │\n' +
+        '  └─────────────────────────────────┘\n' +
+        '```\n' +
+        '> 🎬  Edit must be **minimum 6 seconds** long\n' +
+        '> 🔁  Loops do **not** count\n' +
+        '> 📅  Edit must be **less than 1 month** old\n' +
+        '> 🚫  No **Heavy IBs** allowed\n\n' +
+        '**Make sure you meet all requirements before applying.**\n' +
+        'Press the button below when you are ready.'
       )
-      .setFooter({ text: 'Noxis Editing Unit' });
+      .setFooter({ text: 'NOXIS Editing Unit  •  Applications' })
+      .setTimestamp();
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -52,21 +80,56 @@ client.once('ready', async () => {
         .setEmoji('📝')
     );
 
-    await applyChannel.send({ embeds: [embed], components: [row] });
+    await ch.send({ embeds: [embed], components: [row] });
     console.log('✅ Apply embed sent.');
-  } catch (err) {
-    console.error('❌ Could not send apply embed:', err.message);
+  } catch (e) {
+    console.error('❌ Startup error:', e.message);
   }
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
 
-  // Button: open modal
+  // ── Open apply modal ────────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === 'open_apply') {
+    const userId = interaction.user.id;
+
+    // Check cooldown
+    if (cooldowns.has(userId)) {
+      const deniedAt  = cooldowns.get(userId);
+      const elapsed   = (Date.now() - deniedAt) / 1000 / 3600;
+      const remaining = Math.ceil(COOLDOWN_HOURS - elapsed);
+      if (elapsed < COOLDOWN_HOURS) {
+        return interaction.reply({
+          embeds: [new EmbedBuilder()
+            .setColor(0xed4245)
+            .setTitle('⏳  Cooldown Active')
+            .setDescription(`You were recently denied. You can reapply in **${remaining} hour(s)**.\n\nUse this time to improve your edits. We will be here.`)
+            .setFooter({ text: 'NOXIS Editing Unit' })
+          ],
+          ephemeral: true
+        });
+      } else {
+        cooldowns.delete(userId);
+      }
+    }
+
+    // Check if already has pending app
+    if (pendingApps.has(userId)) {
+      return interaction.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0xff9900)
+          .setTitle('⚠️  Application Pending')
+          .setDescription('You already have an open application being reviewed.\n\nPlease wait for the staff to make a decision.')
+          .setFooter({ text: 'NOXIS Editing Unit' })
+        ],
+        ephemeral: true
+      });
+    }
+
     const modal = new ModalBuilder()
       .setCustomId('apply_modal')
-      .setTitle('Noxis — Unit Application');
+      .setTitle('NOXIS — Unit Application');
 
     modal.addComponents(
       new ActionRowBuilder().addComponents(
@@ -82,7 +145,7 @@ client.on('interactionCreate', async (interaction) => {
           .setCustomId('proof')
           .setLabel('2. Proof that the edit is yours')
           .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder('Screenshot of editing process, WIP, etc.')
+          .setPlaceholder('Screenshot of editing process, WIP, behind the scenes...')
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
@@ -98,7 +161,7 @@ client.on('interactionCreate', async (interaction) => {
           .setCustomId('active')
           .setLabel('4. Will you be active in this community?')
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder('Yes / No')
+          .setPlaceholder('Yes / No — feel free to explain')
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
@@ -114,11 +177,11 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.showModal(modal);
   }
 
-  // Modal submitted
+  // ── Modal submitted ──────────────────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId === 'apply_modal') {
     await interaction.deferReply({ ephemeral: true });
 
-    appCount++;
+    appCount.value++;
 
     const editLink  = interaction.fields.getTextInputValue('edit_link');
     const proof     = interaction.fields.getTextInputValue('proof');
@@ -130,26 +193,25 @@ client.on('interactionCreate', async (interaction) => {
     const guild     = interaction.guild;
     const judgeRole = guild.roles.cache.find(r => r.name === JUDGE_ROLE_NAME);
 
-    const date = new Date().toLocaleString('en-GB', {
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit'
-    });
+    // Mark as pending
+    pendingApps.set(applicant.id, true);
 
     const embed = new EmbedBuilder()
       .setColor(0xff1a2e)
       .setAuthor({
-        name: applicant.username,
+        name: `${applicant.username}`,
         iconURL: applicant.displayAvatarURL({ dynamic: true }),
       })
-      .setTitle(`Unit app (#${appCount})`)
+      .setTitle(`Unit app (#${appCount.value})`)
       .addFields(
-        { name: '1. Send edit (TikTok/Streamable)', value: editLink },
-        { name: '2. Proof that is yours',           value: proof    },
-        { name: '3. Socials (TikTok/Yt)',           value: socials  },
-        { name: '4. Will you be active?',           value: active   },
-        { name: '5. Would you like to receive criticism?', value: criticism },
+        { name: '🎬  Edit Link',              value: editLink  },
+        { name: '🔍  Proof that it is yours', value: proof     },
+        { name: '📱  Socials',                value: socials   },
+        { name: '⚡  Active in community?',   value: active    },
+        { name: '💬  Accepts criticism?',     value: criticism },
       )
-      .setFooter({ text: `User ID: ${applicant.id}  •  ${date}` });
+      .setFooter({ text: `User ID: ${applicant.id}  •  ${stamp()}` })
+      .setTimestamp();
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -164,67 +226,108 @@ client.on('interactionCreate', async (interaction) => {
         .setEmoji('❌'),
     );
 
-    const resChannel = guild.channels.cache.get(RES_CHANNEL_ID);
-    if (resChannel) {
+    const resCh = guild.channels.cache.get(RES_CHANNEL_ID);
+    if (resCh) {
       const ping = judgeRole ? `<@&${judgeRole.id}>` : '@Judge';
-      await resChannel.send({ content: ping, embeds: [embed], components: [row] });
+      await resCh.send({ content: ping, embeds: [embed], components: [row] });
     }
 
-    await interaction.editReply({ content: '✅ Application submitted! Staff will review it soon.' });
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xff1a2e)
+        .setTitle('✅  Application Submitted')
+        .setDescription('Your application has been sent to the staff.\n\nSit tight — we will review it and get back to you via DM.')
+        .setFooter({ text: 'NOXIS Editing Unit' })
+      ]
+    });
   }
 
-  // Accept button
+  // ── Accept ───────────────────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId.startsWith('accept_')) {
-    const targetId = interaction.customId.replace('accept_', '');
-    const judge    = interaction.member;
-
-    if (!judge.roles.cache.some(r => r.name === JUDGE_ROLE_NAME) && !judge.permissions.has(PermissionFlagsBits.ManageGuild)) {
-      return interaction.reply({ content: '❌ Only Judges can do this.', ephemeral: true });
+    if (!isJudge(interaction.member)) {
+      return interaction.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0xed4245)
+          .setDescription('❌  Only **Judges** can accept or deny applications.')
+        ],
+        ephemeral: true
+      });
     }
 
-    const original     = interaction.message;
-    const updatedEmbed = EmbedBuilder.from(original.embeds[0])
+    const targetId = interaction.customId.replace('accept_', '');
+    pendingApps.delete(targetId);
+    cooldowns.delete(targetId);
+
+    const orig = interaction.message;
+    const updatedEmbed = EmbedBuilder.from(orig.embeds[0])
       .setColor(0x57f287)
-      .setTitle(original.embeds[0].title + '  ✅  ACCEPTED');
+      .setTitle(orig.embeds[0].title + '  —  ✅ ACCEPTED');
 
     await interaction.update({
       embeds: [updatedEmbed],
       components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('done').setLabel(`Accepted by ${judge.user.username}`).setStyle(ButtonStyle.Success).setDisabled(true)
+        new ButtonBuilder()
+          .setCustomId('done')
+          .setLabel(`Accepted by ${interaction.user.username}`)
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true)
       )]
     });
 
     try {
       const member = await interaction.guild.members.fetch(targetId);
+
+      // Give Noxis Member role automatically
+      const memberRole = interaction.guild.roles.cache.get('1485772106254913748');
+      if (memberRole) await member.roles.add(memberRole).catch(() => {});
+
       await member.send({
         embeds: [new EmbedBuilder()
           .setColor(0xff1a2e)
-          .setTitle('🔴  Noxis — Application Result')
-          .setDescription('Your application to **Noxis Editing Unit** has been **accepted**.\n\nWelcome to the unit. Make us proud.')
-          .setFooter({ text: 'Noxis Editing Unit' })
+          .setTitle('🔴  NOXIS — Application Result')
+          .setDescription(
+            '```\n  ✅  YOUR APPLICATION WAS ACCEPTED\n```\n' +
+            'Welcome to **Noxis Editing Unit**.\n\n' +
+            'You now have the **Noxis Member** role.\n' +
+            'You are part of a team that takes the craft seriously.\n' +
+            'Make us proud — every frame counts.'
+          )
+          .setFooter({ text: 'NOXIS Editing Unit' })
+          .setTimestamp()
         ]
       });
     } catch (_) {}
   }
 
-  // Deny button
+  // ── Deny ─────────────────────────────────────────────────────────────────────
   if (interaction.isButton() && interaction.customId.startsWith('deny_')) {
-    const targetId = interaction.customId.replace('deny_', '');
-    const judge    = interaction.member;
-
-    if (!judge.roles.cache.some(r => r.name === JUDGE_ROLE_NAME) && !judge.permissions.has(PermissionFlagsBits.ManageGuild)) {
-      return interaction.reply({ content: '❌ Only Judges can do this.', ephemeral: true });
+    if (!isJudge(interaction.member)) {
+      return interaction.reply({
+        embeds: [new EmbedBuilder()
+          .setColor(0xed4245)
+          .setDescription('❌  Only **Judges** can accept or deny applications.')
+        ],
+        ephemeral: true
+      });
     }
 
-    const original     = interaction.message;
-    const updatedEmbed = EmbedBuilder.from(original.embeds[0])
+    const targetId = interaction.customId.replace('deny_', '');
+    pendingApps.delete(targetId);
+    cooldowns.set(targetId, Date.now()); // start cooldown
+
+    const orig = interaction.message;
+    const updatedEmbed = EmbedBuilder.from(orig.embeds[0])
       .setColor(0xed4245)
-      .setTitle(original.embeds[0].title + '  ❌  DENIED');
+      .setTitle(orig.embeds[0].title + '  —  ❌ DENIED');
 
     await interaction.update({
       embeds: [updatedEmbed],
       components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('done').setLabel(`Denied by ${judge.user.username}`).setStyle(ButtonStyle.Danger).setDisabled(true)
+        new ButtonBuilder()
+          .setCustomId('done')
+          .setLabel(`Denied by ${interaction.user.username}`)
+          .setStyle(ButtonStyle.Danger)
+          .setDisabled(true)
       )]
     });
 
@@ -233,13 +336,20 @@ client.on('interactionCreate', async (interaction) => {
       await member.send({
         embeds: [new EmbedBuilder()
           .setColor(0xed4245)
-          .setTitle('Noxis — Application Result')
-          .setDescription('Your application to **Noxis Editing Unit** has been **denied** this time.\n\nKeep grinding and try again later.')
-          .setFooter({ text: 'Noxis Editing Unit' })
+          .setTitle('NOXIS — Application Result')
+          .setDescription(
+            '```\n  ❌  YOUR APPLICATION WAS DENIED\n```\n' +
+            'Your application to **Noxis Editing Unit** was not accepted this time.\n\n' +
+            `You can reapply in **${COOLDOWN_HOURS} hours**.\n\n` +
+            'Use this time to work on your craft. We want to see you improve.'
+          )
+          .setFooter({ text: 'NOXIS Editing Unit  •  You can reapply later' })
+          .setTimestamp()
         ]
       });
     } catch (_) {}
   }
+
 });
 
 client.login(process.env.DISCORD_TOKEN);
