@@ -1,13 +1,15 @@
 {
   "name": "noxis-bot",
-  "version": "1.0.0",
-  "description": "Noxis Editing Unit — Discord Application Bot",
+  "version": "2.0.0",
+  "description": "Noxis Bot + API",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.15.3"
+    "discord.js": "^14.15.3",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
   },
   "engines": {
     "node": ">=18.0.0"
