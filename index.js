@@ -134,7 +134,7 @@ client.once('ready', async () => {
         '```\n' +
         '> 🎬  Edit must be **minimum 6 seconds** long\n' +
         '> 🔁  Loops do **not** count\n' +
-        '> 📅  Edit must be **less than 1 month** old\n' +
+        '> 📅  The edit must not be **older than a month**\n' +
         '> 🚫  No **Heavy IBs** allowed\n\n' +
         '**Make sure you meet all requirements before applying.**\n' +
         'Press the button below when you are ready.'
