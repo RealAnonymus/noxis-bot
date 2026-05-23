@@ -128,9 +128,7 @@ client.once('ready', async () => {
       .setTitle('NOXIS  —  Unit Applications')
       .setDescription(
         '```\n' +
-        '  ┌─────────────────────────────────┐\n' +
         '  │   APPLYING TO BE A NOXIS MEMBER │\n' +
-        '  └─────────────────────────────────┘\n' +
         '```\n' +
         '> 🎬  Edit must be **minimum 6 seconds** long\n' +
         '> 🔁  Loops do **not** count\n' +
